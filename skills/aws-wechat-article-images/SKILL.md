@@ -126,7 +126,7 @@ metadata:
 
 单张用 `generate <prompt.md> -o <out.png>`；重跑批量时加 `--skip-existing`，已生成合格的不重复付费。图片规格见 [specs.md](references/specs.md)。
 
-**⛔ 先看日志里有没有「腰斩」告警。** 端点会间歇性忽略 `aspectRatio` 返回方图，脚本再把它居中裁到目标比例——而模型是**按方画布构图**的（「左侧四成…右侧六成…字高 28%」），砍掉一大半之后主体偏位、标题错位。实测四张封面里三张如此。看到 `[WARN] … 只剩 43%……腰斩` 就重跑这一张（`--retries 1`）：这和分辨率略低不同，那个读者看不出，这个一眼就看得出。
+**先检查返回比例与文字完整性。** 脚本默认 `fit: preserve`，保留 API 返回的完整图；比例不符会告警，不再自动裁掉文字。目标比例仍须发布前验收。只有确认边缘可舍弃时，才在 frontmatter 写 `fit: crop` 或使用 `--fit crop` 恢复居中裁切。`generate`、`batch` 都支持，命令行优先。出现文字缺失先判断原图已有缺字还是裁切造成；保留图已完整时不要盲目重生成。详见 [比例异常处理](references/branches.md#六之前比例不符先保留原图) 和 [可复查的使用示例](../../examples/image-fit/README.md)。
 
 **⛔ 出字问题先改 prompt，不要换工具。** 不许因为「API 出来的字有裁切」就改用 matplotlib / PIL 重画——那样媒介和形态整套方法论被绕开，钱还付两遍。理由见 [prompt-construction.md](references/image-styles/prompt-construction.md)。
 

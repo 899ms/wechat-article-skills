@@ -90,15 +90,13 @@ SKILL.md 只写主路径：解析标记 → 定风格 → 写 prompt → 生成 
 
 ---
 
-## 六之前：端点连着两次腰斩就别再试了 ⛔
+## 六之前：比例不符先保留原图
 
-`[WARN] … 只剩 43%……腰斩` 值得重跑**一次**（`--retries 1`）。但**连着两次都被腰斩，就停手**。
+默认 `fit: preserve` 原样保存返回数据，避免方图被裁成横图后标题或脚注消失。`aspect` 是请求目标，不能证明返回图已经合格。比例不符时，查看原图的文字、边缘和最终发布位置，接受原比例或另行调整版式。
 
-实测 2026-09-12：同一端点、同一模型、同一天——一边连出 6 张方图（封面重跑 3 次、正文重跑 3 次，**全中**，改了 prompt 也没用），另一边正常返回 1584×672 / 1408×768，一次没裁。这说明端点是**成阵子**地忽略 `aspectRatio`，不是每张独立掷骰子。它不灵的时候，第三次第四次只是接着付钱。
+只有构图允许舍弃边缘时才使用 `--fit crop`（也可在 prompt frontmatter 写 `fit: crop`），这是对旧版自动居中裁切的显式兼容选项。单张和批量均支持；命令行覆盖 frontmatter。不要仅为了消除告警重复付费生成；修改配置或提示词也不能保证端点遵守比例。
 
-这时两条路：接受这张，或者在 `config.yaml` 的 `image_model.default_size` 里写死目标尺寸再跑。
-
-每次调用都会打印 `本次调用生图 API N 次（按张计费）`——**单张模式也打**，重跑时盯着这行看花了多少。
+每次调用会打印生图 API 调用次数；`--retries` 处理现有质量检查失败，不保证修复比例或错字。
 
 ---
 
@@ -111,8 +109,8 @@ SKILL.md 只写主路径：解析标记 → 定风格 → 写 prompt → 生成 
 | `…/v1/images/generations` | DALL-E / gpt-image 等 | `size` 像素串 |
 | `…/v1/chat/completions` | Gemini 等多模态（含中转站） | `extra_body.imageConfig`（比例 + 分辨率档位） |
 
-`imageConfig` 是 Gemini 特有结构，**只对识别为 Gemini 系的模型发送**（模型名含 gemini / nano-banana / imagen），其余模型保持「尺寸并入提示 + 生成后裁切」，以免严格网关报 400。可用 `image_model.aspect_mode`（`auto` / `imageconfig` / `none`）显式覆盖。
+`imageConfig` 是 Gemini 特有结构，**只对识别为 Gemini 系的模型发送**（模型名含 gemini / nano-banana / imagen），其余模型保持「尺寸并入提示 + 按 fit 策略处理」，以免严格网关报 400。可用 `image_model.aspect_mode`（`auto` / `imageconfig` / `none`）显式覆盖。
 
-无论走哪条路径，最终都会按 `aspect` 校正到目标比例——**但端点会间歇性忽略它**，这时脚本打「腰斩」告警，见 SKILL.md 第 6 步。
+端点可能忽略请求比例。默认保留原图并提示偏差；只有显式 `fit: crop` 才校正到目标比例，仍需检查文字完整性。
 
 连通性自检：`{python} {baseDir}/scripts/image_create.py test`（**会真的生成一张图，按张计费**）。

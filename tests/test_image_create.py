@@ -457,3 +457,57 @@ class StyleNameValidationTest(unittest.TestCase):
         """内置形态目录不能是空的，否则上面所有校验都会变成「全都不存在」。"""
         self.assertGreaterEqual(len(ic._list_style_names("image-styles")), 8)
         self.assertGreaterEqual(len(ic._list_style_names("cover-styles")), 10)
+
+@unittest.skipIf(Image is None, "Pillow 未安装")
+class PreserveContentTest(unittest.TestCase):
+    def _data(self):
+        image = Image.new('RGB', (1024, 1024), 'white')
+        image.putpixel((0, 0), (255, 0, 0))
+        image.putpixel((1023, 1023), (0, 0, 255))
+        buf = io.BytesIO()
+        image.save(buf, 'PNG')
+        return buf.getvalue()
+
+    def test_default_keeps_entire_returned_file_and_warns(self):
+        from contextlib import redirect_stderr
+        data = self._data()
+        err = io.StringIO()
+        with redirect_stderr(err):
+            result = ic._fit_to_aspect(data, '3:4')
+        self.assertEqual(result, data)
+        self.assertIn('[WARN]', err.getvalue())
+        self.assertEqual(Image.open(io.BytesIO(result)).getpixel((0, 0)), (255, 0, 0))
+
+    def test_explicit_crop_retains_legacy_dimensions(self):
+        result = ic._fit_to_aspect(self._data(), '3:4', 'crop')
+        self.assertEqual(Image.open(io.BytesIO(result)).size, (768, 1024))
+
+    def test_fit_precedence_and_invalid_value(self):
+        self.assertEqual(ic._resolve_fit(None, {}), 'preserve')
+        self.assertEqual(ic._resolve_fit(None, {'fit': 'crop'}), 'crop')
+        self.assertEqual(ic._resolve_fit('preserve', {'fit': 'crop'}), 'preserve')
+        with self.assertRaises(ValueError):
+            ic._resolve_fit(None, {'fit': 'stretch'})
+
+    def test_generate_and_batch_save_complete_api_response(self):
+        from unittest.mock import patch
+        data = self._data()
+        for command in ('generate', 'batch'):
+            for fit, expected in ((None, (1024, 1024)), ('crop', (768, 1024))):
+                with self.subTest(command=command, fit=fit), tempfile.TemporaryDirectory() as tmp:
+                    root = Path(tmp)
+                    prompts = root / 'prompts'
+                    prompts.mkdir()
+                    prompt = prompts / 'card.md'
+                    prompt.write_text('---\naspect: "3:4"\n---\nA card\n')
+                    output = root / ('card.png' if command == 'generate' else 'out')
+                    argv = ['image_create.py', command, str(prompt if command == 'generate' else prompts), '-o', str(output)]
+                    if fit:
+                        argv += ['--fit', fit]
+                    with patch.object(sys, 'argv', argv), patch.object(ic, '_require_repo_root'), patch.object(ic, '_resolve_model_config', return_value={}), patch.object(ic, 'generate_image', return_value=data) as generate:
+                        ic.main()
+                    result = (output if command == 'generate' else output / 'card.png').read_bytes()
+                    self.assertEqual(Image.open(io.BytesIO(result)).size, expected)
+                    if fit is None:
+                        self.assertEqual(result, data)
+                    self.assertEqual(generate.call_count, 1)

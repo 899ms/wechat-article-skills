@@ -19,8 +19,8 @@ Agent 可读取 `imgs/prompts/*.md` 中的 prompt 文件后用自身多模态能
     python skills/aws-wechat-article-images/scripts/image_create.py batch imgs/prompts/ -o imgs/
     python skills/aws-wechat-article-images/scripts/image_create.py test
 
-prompt 文件 frontmatter 的 `aspect`（如 "2.35:1"）会映射为 API 支持的最接近尺寸；生成后若装有 Pillow，
-会按该比例居中裁切（未装则保留原尺寸并给出 [WARN]）。`aspect` 建议加引号：未加引号的 `16:9`
+prompt 文件 frontmatter 的 `aspect`（如 "2.35:1"）会映射为 API 支持的最接近尺寸；生成后默认保留完整返回图。
+只有显式选择 `--fit crop` 或 frontmatter `fit: crop` 才居中裁切；比例不符会告警，不能当作规格验收通过。`aspect` 建议加引号：未加引号的 `16:9`
 会被 YAML 1.1 解析成整数，脚本会尽量反推，但不保证所有写法。
 
 退出码：
@@ -554,7 +554,7 @@ def _generate_image_openai_compatible(model_cfg: dict, prompt: str, size: str = 
             body["extra_body"] = {"imageConfig": image_cfg}
         else:
             # 非 Gemini 端点或未给比例：保持原有行为，尺寸并入提示；
-            # 真实比例由调用方在生成后用 _crop_to_aspect 兜底
+            # 调用方在生成后按 fit 策略保留原图或显式裁切
             sz = size or model_cfg["default_size"]
             q = quality or model_cfg["default_quality"]
             body["messages"][0]["content"] = f"{prompt}\n\n（尺寸: {sz}，质量: {q}）"
@@ -586,7 +586,7 @@ def _generate_image_openai_compatible(model_cfg: dict, prompt: str, size: str = 
         elif aspect:
             _info(
                 f"模式: chat/completions | 端点不接受 imageConfig（模型 {model_cfg['model']}），"
-                f"尺寸并入提示，生成后按 {aspect} 裁切"
+                f"尺寸并入提示，返回后按所选 fit 策略处理（目标 {aspect}）"
             )
         else:
             _info("模式: chat/completions | 无可用比例，尺寸并入用户提示")
@@ -844,6 +844,36 @@ def _resolve_size(cli_size: str | None, meta: dict) -> tuple[str | None, str | N
         _info(f"比例 {raw} 不在预设表中，先按 {size} 生成再裁切")
         return size, raw
     return raw, None
+
+
+def _resolve_fit(cli_fit, meta) -> str:
+    fit = cli_fit if cli_fit is not None else meta.get("fit", "preserve")
+    if fit not in ("preserve", "crop"):
+        raise ValueError("fit 必须是 preserve 或 crop")
+    return fit
+
+
+def _fit_to_aspect(img_data: bytes, aspect: str | None, fit: str = "preserve") -> bytes:
+    """默认不丢任何像素；只有显式 crop 才调用有损裁切。"""
+    if fit not in ("preserve", "crop"):
+        raise ValueError("fit 必须是 preserve 或 crop")
+    if not aspect:
+        return img_data
+    if fit == "crop":
+        return _crop_to_aspect(img_data, aspect)
+    target = _aspect_value(aspect)
+    if not target:
+        return img_data
+    try:
+        from PIL import Image
+        with Image.open(io.BytesIO(img_data)) as im:
+            w, h = im.size
+        if abs(w / h - target) / target >= 0.01:
+            print(f"[WARN] 返回图 {w}x{h} 与目标 {aspect} 不符；已保留完整原图，未裁切。"
+                  "发布前检查尺寸与文字；确认可裁后才用 --fit crop。", file=sys.stderr)
+    except (ImportError, OSError, ValueError):
+        print("[WARN] 无法核验图片比例；保留原始返回数据，需人工检查。", file=sys.stderr)
+    return img_data
 
 
 def _crop_to_aspect(img_data: bytes, aspect: str) -> bytes:
@@ -1176,6 +1206,7 @@ def main():
     p_gen.add_argument("prompt_file", help="prompt 文件路径（.md，可含 YAML frontmatter）")
     p_gen.add_argument("-o", "--output", help="输出路径（默认同名 .png）")
     p_gen.add_argument("--size", help="尺寸（如 1024x1024）或比例（如 16:9）")
+    p_gen.add_argument("--fit", choices=("preserve", "crop"), help="比例处理：默认保留完整图；crop 显式居中裁切，可在 frontmatter 配置 fit")
     p_gen.add_argument("--quality", help="质量（standard/hd）")
     p_gen.add_argument("--retries", type=int, default=None, metavar="N",
                        help=f"检查不合格时自动重跑几次（默认 {CHECK_RETRIES}）。"
@@ -1185,6 +1216,7 @@ def main():
     p_batch.add_argument("prompts_dir", help="prompt 文件目录")
     p_batch.add_argument("-o", "--output-dir", help="输出目录（默认同目录）")
     p_batch.add_argument("--size", help="统一尺寸")
+    p_batch.add_argument("--fit", choices=("preserve", "crop"), help="比例处理：默认保留完整图；crop 显式居中裁切，可在 frontmatter 配置 fit")
     p_batch.add_argument("--quality", help="统一质量")
     p_batch.add_argument("--retries", type=int, default=None, metavar="N",
                        help=f"检查不合格时自动重跑几次（默认 {CHECK_RETRIES}）")
@@ -1249,6 +1281,7 @@ def main():
         prompt, meta = _read_prompt_file(prompt_path)
 
         size, crop_aspect = _resolve_size(args.size, meta)
+        fit = _resolve_fit(args.fit, meta)
         quality = args.quality or meta.get("quality")
         # 900px 那条线只卡封面；正文插图按它重生成，是为读者看不见的差别付费
         is_cover = _is_cover(prompt_path.stem, meta) or (
@@ -1258,7 +1291,7 @@ def main():
             data = generate_image(model_cfg, prompt, size=size, quality=quality,
                                   aspect=crop_aspect, resolution=meta.get("resolution"))
             # 端点已按比例出图时裁切是空操作（差异 <1% 直接返回原图）
-            return _crop_to_aspect(data, crop_aspect) if crop_aspect else data
+            return _fit_to_aspect(data, crop_aspect, fit)
 
         img_data = _generate_with_checks(prompt_path.name, gen,
                                          check_resolution=is_cover, retries=args.retries)
@@ -1329,13 +1362,14 @@ def main():
                 prompt, meta = _read_prompt_file(pf)
 
                 size, crop_aspect = _resolve_size(args.size, meta)
+                fit = _resolve_fit(args.fit, meta)
                 quality = args.quality or meta.get("quality")
                 is_cover = _is_cover(pf.stem, meta)
 
-                def gen(p=prompt, sz=size, q=quality, ca=crop_aspect, m=meta):
+                def gen(p=prompt, sz=size, q=quality, ca=crop_aspect, m=meta, ft=fit):
                     data = generate_image(model_cfg, p, size=sz, quality=q, aspect=ca,
                                           resolution=m.get("resolution"))
-                    return _crop_to_aspect(data, ca) if ca else data
+                    return _fit_to_aspect(data, ca, ft)
 
                 img_data = _generate_with_checks(pf.name, gen,
                                                  check_resolution=is_cover,
