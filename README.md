@@ -420,6 +420,8 @@ IMAGE_MODEL_API_KEY=sk-...
 
 ## 📚 教程与案例
 
+- 🧩 [一份更新如何改写成多平台内容](examples/multichannel-facts/README.md) · 含事实清单、提示词与核对样例
+
 - 📖 [如何用好 aiworkskills 平台？从配置到发文一文读懂](https://mp.weixin.qq.com/s/rcnq_gg3XXRwJ7ovQtBo1A) · 官方使用指南
 - 🔧 [WorkBuddy 如何使用 AI Work Skills 运行公众号](https://mp.weixin.qq.com/s/GQjCY5UsArV9XI5AyoxWZQ) · WorkBuddy 组合案例
 - ⚡ [QClaw + aiworkskills 一键运营公众号](https://mp.weixin.qq.com/s/xLUJBc2bbrJvgeAesbhsFA) · QClaw 组合案例
